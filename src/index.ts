@@ -53,6 +53,7 @@ import { openApiDocument } from './plugin/openapi';
 import { registerWeatherProvider } from './plugin/weather';
 import type {
   DataStatus,
+  DataStamp,
   ForecastLoading,
   ForecastMemory,
   ForecastRunInfo,
@@ -503,6 +504,26 @@ export = function plugin(app: SkApp): SignalKPlugin {
     tiles.store.setGenerations(g);
   }
 
+  /**
+   * The data the plugin holds now, as an answer's stamp must name it
+   * (DataStamp): the decoded run in use, the SMOC run, the RTOFS run in
+   * the configured region, and the tide run. An answer is served and
+   * saved only when the worker read exactly this (tiles.ts TileService,
+   * prebuild.ts); on a mismatch the request is asked again, so a query
+   * that straddles a data change is answered from the new data, and an
+   * answer computed from data replaced while it was in flight is never
+   * served.
+   */
+  function dataStamp(): DataStamp {
+    const cfg = config;
+    return {
+      forecast: forecastRun ? { cycleMs: forecastRun.index.cycleTimeMs, params: forecastRun.index.request.params } : null,
+      smoc: smocShared ? { key: smocShared.run.key, settled: smocShared.run.settled } : null,
+      rtofs: rtofsForRegion(rtofsShared, !!cfg?.currents.rtofsEnabled, cfg?.currents.rtofsRegion ?? '')?.runMs ?? null,
+      tide: tidesRun && cfg?.tides.enabled ? { key: tidesRun.key, settled: tidesRun.settled } : null,
+    };
+  }
+
   /** Own-vessel position from Signal K (navigation.position), or null. */
   function vesselPosition(): VesselPosition | null {
     try {
@@ -860,7 +881,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         return;
       }
       case 'query-result':
-        pool.resolveQuery(msg.id, msg.result, msg.complete);
+        pool.resolveQuery(msg.id, msg.result, msg.complete, msg.stamp);
         return;
       case 'query-error':
         pool.rejectQuery(msg.id, msg.message);
@@ -944,6 +965,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
           m.push({ type: 'refresh', force: false });
           return m;
         },
+        dataStamp,
         vesselPosition,
         lastHourMs: layer => {
           if (layer === 'tide') return tidesRun ? runLastMs(tidesRun) : null;
@@ -1029,7 +1051,8 @@ export = function plugin(app: SkApp): SignalKPlugin {
     meshes.run();
     tiles = new TileService(
       new TileStore({ root: path.join(dataDir, 'overlay-tiles'), capBytes: config.overlayCache.diskCapBytes, log }),
-      (kind, args, signal) => pool.queryFull(kind, args, signal)
+      (kind, args, signal) => pool.queryFull(kind, args, signal),
+      dataStamp
     );
     updateTileGenerations();
     startPrebuilder(dataDir);
