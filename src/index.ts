@@ -737,6 +737,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         forecastRun = msg.run;
         void charts.publishGroups();
         updateTileGenerations();
+        tiles?.dataChanged();
         forecastError = null;
         if (failedRefreshTimer) {
           clearTimeout(failedRefreshTimer);
@@ -817,6 +818,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
           // A run loaded for a region the settings have since replaced is dropped here (and by the workers).
           if (msg.rtofs && !(config && rtofsForRegion(msg.rtofs, config.currents.rtofsEnabled, config.currents.rtofsRegion))) return;
           rtofsShared = msg.rtofs;
+          tiles?.dataChanged();
           pool.post('route', { type: 'rtofs', rtofs: msg.rtofs });
           prebuilder?.broadcast({ type: 'rtofs', rtofs: msg.rtofs });
         }
@@ -825,6 +827,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
         if (role === 'data') {
           // SharedArrayBuffer views: the route worker gets the same memory.
           smocShared = msg.smoc;
+          tiles?.dataChanged();
           pool.post('route', { type: 'smoc', smoc: msg.smoc });
           prebuilder?.broadcast({ type: 'smoc', smoc: msg.smoc });
           updateTileGenerations();
@@ -833,6 +836,7 @@ export = function plugin(app: SkApp): SignalKPlugin {
       case 'tides-run':
         if (role === 'data') {
           tidesRun = msg.run;
+          tiles?.dataChanged();
           prebuilder?.broadcast({ type: 'tides-run', run: msg.run });
           // The tide group depends on a tide run; rewritten only when the group key changes.
           void charts.publishGroups();
@@ -920,6 +924,13 @@ export = function plugin(app: SkApp): SignalKPlugin {
       dataSettingsRev++;
       updateTileGenerations();
     }
+    // dataStamp() moved here for currents (the shared blocks are cleared and
+    // the RTOFS region is read from the new config) and tides (the enabled
+    // flag is read from it); the forecast part moves when the worker's reload
+    // lands, which wakes through the 'forecast' handler. Mismatched answers
+    // wait for exactly this instead of sending identical queries until the
+    // worker's background reload catches up.
+    if (out.currents || out.tides) tiles?.dataChanged();
     pool.post('data', {
       type: 'config',
       config,
